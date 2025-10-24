@@ -1,0 +1,13 @@
+#!/bin/bash
+
+
+#SBATCH --job-name=BUSCO   # Job name
+
+
+eval "$(conda shell.bash hook)"
+conda activate BUSCO_5_6_1
+
+assembly_file=$1
+assembly_name=$2
+
+busco -i $assembly_file -m genome -c 40 -l actinopterygii_odb10 -o BUSCO_$assembly_name --offline 

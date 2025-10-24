@@ -1,0 +1,73 @@
+#!/bin/bash
+
+
+#SBATCH --job-name=Consensus_Exons  # Job name
+
+
+eval "$(conda shell.bash hook)"
+conda activate miniprot
+
+LMOD_DISABLE_SAME_NAME_AUTOSWAP=no
+
+
+gene=$1 
+ref_genome=Ancistrus_triradiatus/GCA_025084515.1_ASM2508451v1_genomic.fna
+
+
+##Generate a consensus of exon sequences for each gene and each species, and merge exons
+
+module purge ; module load SAMtools ; module load BCFtools
+
+#extract the gene strand
+strand=`grep "$gene" Ancistrus_triradiatus.gff.exons | cut -f7 | head -1`
+
+
+
+rm -f Gene_LogFiles/slurm.$gene.out
+rm -f Gene_LogFiles/error.$gene.out
+
+for ID in RHP1 CUL9 ; do 
+
+	if grep -q ">$ID" Consensus_Gene_Sequences.Atri/$gene.consensus.final.fa ; then
+
+		echo "$ID already in file"
+
+	else 
+
+		#Extract current exons consensus in the current individual
+		xargs samtools faidx $ref_genome < Ancistrus_triradiatus.GenesInfos/$gene.pos | bcftools consensus $ID.norm.flt-indels.bcf  >> Consensus_Gene_Sequences.Atri/$gene.$ID.exons.fa
+		
+		#Reformat the fasta file for samtools
+		sed -i 's/:/-/g'  Consensus_Gene_Sequences.Atri/$gene.$ID.exons.fa
+		fasta_formatter -i Consensus_Gene_Sequences.Atri/$gene.$ID.exons.fa -o Consensus_Gene_Sequences.Atri/$gene.$ID.exons.reformat.fa -w 60 ; rm Consensus_Gene_Sequences.Atri/$gene.$ID.exons.fa
+	
+	
+		if [ $strand == "+" ] ; then
+			xargs samtools faidx Consensus_Gene_Sequences.Atri/$gene.$ID.exons.reformat.fa < Ancistrus_triradiatus.GenesInfos/$gene.tiret.pos | grep -v ">" | sed "1i\>$ID"  >> Consensus_Gene_Sequences.Atri/$gene.consensus.final.fa
+		else
+	
+			for curr_exon in `cat Ancistrus_triradiatus.GenesInfos/$gene.tiret.pos.rev` ; do 
+	
+				samtools faidx Consensus_Gene_Sequences.Atri/$gene.$ID.exons.reformat.fa $curr_exon | grep -v ">" > Consensus_Gene_Sequences.Atri/$gene.$ID.temp.fa
+				revseq Consensus_Gene_Sequences.Atri/$gene.$ID.temp.fa Consensus_Gene_Sequences.Atri/$gene.$ID.temp.fa.rev
+				grep -v ">" Consensus_Gene_Sequences.Atri/$gene.$ID.temp.fa.rev >> Consensus_Gene_Sequences.Atri/$gene.$ID.rev
+	
+			done
+	
+			sed "1i\>$ID" Consensus_Gene_Sequences.Atri/$gene.$ID.rev >> Consensus_Gene_Sequences.Atri/$gene.consensus.final.fa
+	
+			rm Consensus_Gene_Sequences.Atri/$gene.$ID.rev
+			rm Consensus_Gene_Sequences.Atri/$gene.$ID.temp.fa.rev
+			rm Consensus_Gene_Sequences.Atri/$gene.$ID.temp.fa
+		fi
+	
+	
+		rm Consensus_Gene_Sequences.Atri/$gene.$ID.exons.reformat.fa*
+
+
+	fi
+
+done
+
+
+

@@ -1,0 +1,74 @@
+#!/bin/bash
+
+
+#SBATCH --job-name=Csubst   # Job name
+
+
+
+LMOD_DISABLE_SAME_NAME_AUTOSWAP=no
+module purge
+module load R/4.4.1-foss-2023b
+
+
+curr_OGG=$1 
+
+#create a csubst temporary folder and remove old csubst files
+rm Coding_sequences_alignments/$curr_OGG.csubst_cb_2.tsv
+rm Coding_sequences_alignments/$curr_OGG.csubst_cb_3.tsv
+rm Coding_sequences_alignments/$curr_OGG.csubst_cb_4.tsv
+rm -r csubst.$curr_OGG ; mkdir csubst.$curr_OGG
+
+
+######### Run CSUBST with the gene tree
+
+#first root at midpoint and add node labels
+Rscript root_midpoint_and_add_labels.R Coding_sequences_alignments/$curr_OGG.prot.trimmed.aln.treefile csubst.$curr_OGG/$curr_OGG.prot.trimmed.aln.treefile.midpoint
+
+#copy the necessary files to the csubst temporary folder
+cp Coding_sequences_alignments/$curr_OGG.cds.aln csubst.$curr_OGG/
+cp Cave_foreground.tsv csubst.$curr_OGG/
+
+cd csubst.$curr_OGG
+
+module purge
+eval "$(conda shell.bash hook)"
+conda activate csubst_env_ubuntu
+
+
+csubst analyze --alignment_file $curr_OGG.cds.aln --rooted_tree_file $curr_OGG.prot.trimmed.aln.treefile.midpoint --threads 8 --foreground Cave_foreground.tsv --fg_exclude_wg yes --fg_stem_only no --cutoff_stat 'OCNany2spe,2.0|omegaCany2spe,5.0' --max_arity 3 --cb yes
+
+rm csubst_alignment_aa.fa
+rm csubst_alignment_codon.fa
+for csubst_file in csubst_* ; do new_name=`echo "$csubst_file" | sed "s/^/$curr_OGG\./g"` ; mv $csubst_file ../Csubst_results_GeneTrees/$new_name ; done
+	
+
+
+######### Now, Run CSUBST with the species tree
+
+
+cd ../ ; rm -r csubst.$curr_OGG ; mkdir csubst.$curr_OGG
+
+
+conda deactivate
+module purge ; module load R/4.4.1-foss-2023b
+
+cp Coding_sequences_alignments/$curr_OGG.cds.trimmed.OneTipPerSp csubst.$curr_OGG/
+cp Cave_foreground.tsv csubst.$curr_OGG/
+
+
+Rscript root_species_tree.R Coding_sequences_alignments/$curr_OGG.prot.trimmed.aln.OneTipPerSp.nwk csubst.$curr_OGG/$curr_OGG.prot.trimmed.aln.treefile.rooted
+
+module purge ; conda activate csubst_env_ubuntu
+
+cd csubst.$curr_OGG
+
+csubst analyze --alignment_file $curr_OGG.cds.trimmed.OneTipPerSp --rooted_tree_file $curr_OGG.prot.trimmed.aln.treefile.rooted --threads 8 --foreground Cave_foreground.tsv --fg_exclude_wg yes --fg_stem_only no --cutoff_stat 'OCNany2spe,2.0|omegaCany2spe,5.0' --max_arity 3 --cb yes
+
+
+rm csubst_alignment_aa.fa
+rm csubst_alignment_codon.fa
+for csubst_file in csubst_* ; do new_name=`echo "$csubst_file" | sed "s/^/$curr_OGG\./g"` ; mv $csubst_file ../Csubst_results_SpeciesTrees/$new_name ; done
+
+
+cd ../ ; rm -r csubst.$curr_OGG
+
