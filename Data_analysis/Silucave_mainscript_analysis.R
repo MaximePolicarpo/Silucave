@@ -254,7 +254,27 @@ scope_vs_assem %>%
   xlab("Genome size - GenomeScope2") +
   ylab("Genome assembly size")
 
+#Hetero vs genome size
+                                             
+cor.test(genomescope_df$hetero_max, genomescope_df$genome_size_max, method="pearson")
+genomescope_df_noout <- genomescope_df %>% filter(species != "Neoarius_graeffei")
+cor.test(genomescope_df_noout$hetero_max, genomescope_df_noout$genome_size_max, method="pearson")
 
+genomescope_df %>%
+  ggplot(., aes(y=hetero_max, x=genome_size_max, color=Habitat)) +
+  geom_point() +
+  geom_smooth(method = "lm", color = "black") +
+  scale_color_manual(values = c("Cave" = "#CC79A7", "Surface" = "#56B4E9")) + 
+  theme_classic() +
+  theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=14)) +
+  theme(axis.text=element_text(size=16),
+        axis.title=element_text(size=18),
+        plot.subtitle=element_text(size=16)) +
+  theme(legend.position = "none") +
+  ylab("Heterozygosity") +
+  xlab("Genome size (bp)")
+                                             
 #Compare GenomeScope genome sizes and animal genome size database
 
 
