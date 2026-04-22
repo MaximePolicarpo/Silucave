@@ -3711,7 +3711,141 @@ GW_dNdS_df_filt %>%
 res.aov.dNdS_GW <- GW_dNdS_df_filt %>% anova_test(MLE ~ as.factor(Cave))
 pwc.dNdS_GW <- GW_dNdS_df_filt %>% tukey_hsd(MLE ~ as.factor(Cave))
 
+##### REVIEW - New dN/dS analysis    ---------------------------------
 
+head(GW_dNdS_df_filt)
+
+GO_annots_df <- read.table("OGG_GOterms.tsv",sep="\t",header=FALSE)
+colnames(GO_annots_df) <- c("OGG", "GO")
+GO_classes_df <- read.table("goterm_class.csv",sep="\t",header=FALSE)
+colnames(GO_classes_df) <- c("GO", "class")
+GO_annots_df <- left_join(GO_annots_df, GO_classes_df, by="GO")
+BP_GO_annots_df <- GO_annots_df %>% filter(class == "biological_process") %>% dplyr::select(-class)
+BP_GO_annots_list <- split(BP_GO_annots_df$GO, BP_GO_annots_df$OGG)
+
+GW_dNdS_df_filt <- left_join(GW_dNdS_df_filt, species_df, by="species")
+
+
+list_goterms <- BP_GO_annots_df %>% pull(GO) %>% unique()
+GO_wilcox_dNdS_df <- as.data.frame(NULL)
+for(curr_GO in list_goterms){
+  
+  curr_OGGs <- BP_GO_annots_df %>% filter(GO == curr_GO) %>% pull(OGG)
+  
+  Surface_scores <-
+    GW_dNdS_df_filt %>% filter(HOG %in% curr_OGGs) %>% filter(Habitat == "Surface") %>% pull(MLE)
+  
+  Cave_scores <-
+    GW_dNdS_df_filt %>% filter(HOG %in% curr_OGGs) %>% filter(Habitat == "Cave") %>% pull(MLE)
+  
+  if(length(Surface_scores) >= 10 & length(Cave_scores) >= 10){
+    curr_wilc <- wilcox.test(Surface_scores,Cave_scores)
+    curr_pvalue <- curr_wilc$p.value
+    mean_Surface <- mean(Surface_scores)
+    mean_Cave <- mean(Cave_scores)
+    
+    curr_df <- as.data.frame(cbind(curr_GO,mean_Surface,mean_Cave,curr_pvalue))
+    colnames(curr_df) <- c("GO", "surface_mean", "cave_mean", "pvalue")
+    
+    GO_wilcox_dNdS_df <- rbind(GO_wilcox_dNdS_df, curr_df)
+  }
+  
+}
+
+write.table(GO_wilcox_dNdS_df, "GO_wilcox_dNdS_df.tsv",
+            col.names=TRUE, row.names=FALSE, quote=FALSE, sep="\t")
+
+GO_wilcox_dNdS_df <- read.table("GO_wilcox_dNdS_df.tsv",
+                                header=TRUE,
+                                sep="\t")
+
+
+#Transform columns as numeric
+GO_wilcox_dNdS_df$pvalue <- as.numeric(GO_wilcox_dNdS_df$pvalue)
+GO_wilcox_dNdS_df$cave_mean <- as.numeric(GO_wilcox_dNdS_df$cave_mean)
+GO_wilcox_dNdS_df$surface_mean <- as.numeric(GO_wilcox_dNdS_df$surface_mean)
+
+#Add GO-term descriptions
+GO_term_desc <- read.table("goterm_desc.csv",sep="\t",header=FALSE)
+colnames(GO_term_desc) <- c("GO", "term")
+GO_wilcox_dNdS_df <- left_join(GO_wilcox_dNdS_df, GO_term_desc, by='GO')
+
+BP_GO_annots_df_desc <- left_join(BP_GO_annots_df, GO_term_desc, by="GO")
+
+#Apply a BH correction
+raw_pvalues <- GO_wilcox_dNdS_df$pvalue
+corr_pvalues <- p.adjust(raw_pvalues, method = "BH")
+GO_wilcox_dNdS_df$corr_pvalue <- corr_pvalues
+
+#Add the delta (cave mean - surface mean)
+
+GO_wilcox_dNdS_df <- GO_wilcox_dNdS_df %>% mutate(delta_mean = cave_mean - surface_mean) 
+
+GO_wilcox_dNdS_df <- GO_wilcox_dNdS_df %>% arrange(corr_pvalue)
+
+write.table(GO_wilcox_dNdS_df, "GO_wilcox_dNdS_df.tsv", 
+            col.names=TRUE, row.names=FALSE, quote=FALSE, sep="\t")
+
+#Lets plot :)
+
+GO_wilcox_dNdS_df <- 
+  GO_wilcox_dNdS_df %>% mutate(delta_col = if_else(
+    delta_mean < 0,
+    "sf_higher",
+    "cf_higher"
+  ))
+
+GO_wilcox_dNdS_df_signif <- GO_wilcox_dNdS_df %>% filter(corr_pvalue <= 0.05)
+
+label_df <- 
+  GO_wilcox_dNdS_df_signif %>%
+  filter(term %in% c(
+    "vitamin A import into cell",
+    "liver development", "brain development", "neurogenesis","regulation of synaptic plasticity",
+    "regulation of postsynapse organization", "regulation of postsynaptic neurotransmitter receptor activity",
+    "axon development", "lens development in camera-type eye"
+  ))
+
+label_df_sec <-
+  GO_wilcox_dNdS_df_signif %>%
+  arrange(delta_mean) %>%
+  head(5)
+
+label_df_third <-
+  GO_wilcox_dNdS_df_signif %>%
+  arrange(desc(delta_mean)) %>%
+  head(5)
+
+label_df <- 
+  rbind(label_df, label_df_sec, label_df_third) %>%
+  distinct()
+
+
+GO_wilcox_dNdS_df_signif %>%
+  ggplot(., aes(x=abs(delta_mean), y=-log10(corr_pvalue), color=delta_col, label = term)) +
+  geom_point(size = 3) +
+  scale_color_manual(values = c("sf_higher" = "#6689E4", "cf_higher" = "#CCAC67")) +
+  theme_classic() +
+  geom_text_repel(data = label_df,
+                  aes(label = term),
+                  size = 2,
+                  box.padding = 0.3,
+                  point.padding = 0.5,
+                  max.overlaps = Inf) +
+  theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=14)) +
+  theme(axis.text=element_text(size=16),
+        axis.title=element_text(size=18),
+        plot.subtitle=element_text(size=16)) +
+  theme(legend.position="none") +
+  xlab("Mean Cave-Surface dN/dS difference") +
+  ylab("-log10(adj.pval)") +
+  xlim(0, 0.3) +
+  ylim(0, 20)
+
+GO_wilcox_dNdS_df_signif %>% arrange(desc(delta_mean))
+
+  
 ##### Compare GW and Vision dN/dS   ---------------------------------
 
 colnames(species_vision_dNdS_df) <- c("species", "Habitat", "mean_dNdS_vision", "median_dNdS_vision")
