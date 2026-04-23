@@ -41,6 +41,8 @@ The master script provided [Orthogroups_analysis.sh](Orthogroups/Orthogroups_ana
 - Launch RERconverge
 - Launch ABSREl, RELAX, CSUBST and MUTPRED2 for each orthogroup.
 
+Proteome fasta file for each species is available in this Github (splitted in three files due to GitHub size limits. To obtain the fasta :
+cat Proteomes_part_* > Proteomes_recombined.zip ; unzip Proteomes_recombined.zip)
 
 ## IV - Data analysis and figures
 
