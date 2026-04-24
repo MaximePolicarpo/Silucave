@@ -5281,116 +5281,272 @@ gt(
 
 
 
-##### Import and analyse RELAX results   ---------------------------------
+##### REVIEW -- Analyse RELAX results   ---------------------------------
+
+RELAX_results_df <- read.table("AllGenes.RELAX.nineiter.csv",
+                            sep=",",
+                            header=FALSE)
+colnames(RELAX_results_df) <- c("HOG", "iteration", "LRT", "K")
 
 
-#Import RELAX results and compute p-values
-RELAX_df <- 
-  read.table("RELAX_results.csv",
-             header=FALSE,
-             sep=",")
-colnames(RELAX_df) <- c("OGG", "LRT", "K")
-RELAX_df <- 
-  as.data.frame(RELAX_df %>%
+RELAX_results_df <- 
+  as.data.frame(RELAX_results_df %>%
                   rowwise() %>%
                   mutate(pvalue = pchisq(LRT, df=1, lower.tail = FALSE)))
 
-RELAX_df <- RELAX_df %>% filter(! is.na(pvalue))
-
-list_pvalues <- RELAX_df$pvalue
-corrected_pvalues <- p.adjust(list_pvalues, method = "BH")
-RELAX_df <- 
-  RELAX_df %>%
-  mutate(BH_pvalue = corrected_pvalues)
-
-
-
-OGG_names_df <- 
-  read.table("OGG_Names_Product.tsv",
-             header=FALSE,
-             sep="\t")
-colnames(OGG_names_df) <- c("OGG", "gene_ID", "gene_name", "evalue_name")
-
-RELAX_df <- left_join(RELAX_df, OGG_names_df, by="OGG") %>% dplyr::select(-evalue_name)
-
-#Add a column with RELAX results
-
-RELAX_df <-
-  RELAX_df %>%
-  mutate(RELAX_rslt = case_when(
-    pvalue <= 0.05 & K >= 1 ~ "Itensification",
-    pvalue <= 0.05 & K < 1 ~ "Relaxation",
-    pvalue > 0.05 ~ "Non_significant"
-  ))
-  
-#Select genes found under accelerated evolution by 
-
-RELAX_RERacc_df <- 
-  RELAX_df %>%
-  filter(OGG %in% RER_accelerated_genes)
-  
-
-#Look at if these genes are under relaxed or positive selection
-
-
-RELAX_RERacc_df %>% 
-  group_by(RELAX_rslt) %>%
-  summarise(count = n())
-
-RELAX_RERacc_df <- 
-  RELAX_RERacc_df %>%
-  mutate(K_normal = if_else(
-    K > 5,
-    5,
-    K
+RELAX_results_df <-
+  RELAX_results_df %>%
+  mutate(category = case_when(
+    (pvalue < 0.05) & (K < 1) ~ "relaxation",
+    (pvalue < 0.05) & (K > 1) ~ "intensification",
+    TRUE ~ "not_significant"
   ))
 
+RELAX_results_df_summary <- 
+  RELAX_results_df %>%
+  group_by(HOG) %>%
+  summarise(
+    n_relaxation = sum(category == "relaxation", na.rm = TRUE),
+    n_intensification = sum(category == "intensification", na.rm = TRUE),
+    n_not_significant = sum(category == "not_significant", na.rm = TRUE),
+    mean_K = case_when(
+      n_intensification >= 5 ~ median(K[category == "intensification"], na.rm = TRUE),
+      n_relaxation >= 5      ~ median(K[category == "relaxation"], na.rm = TRUE),
+      TRUE                   ~ median(K, na.rm = TRUE)
+    ),
+    consensus = case_when(
+      n_intensification >= 5 ~ "intensification",
+      n_relaxation >= 5      ~ "relaxation",
+      TRUE                   ~ "not_significant"
+    ),
+    .groups = "drop"
+  )
 
-# Add genes belonign to visual go-terms
+RELAX_results_df_summary <- as.data.frame(RELAX_results_df_summary)
 
-RELAX_RERacc_df <- 
-  RELAX_RERacc_df %>%
-  mutate(vision_related = if_else(
-    OGG %in% visual_OGGs,
-    "Yes", 
-    "No"
+RELAX_results_df_summary %>%
+  ggplot(aes(x = consensus,
+             y = pmin(mean_K, 5),
+             fill = consensus)) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("relaxation" = "#CC79A7",
+                               "not_significant" = "gray",
+                               "intensification" = "#56B4E9")) + 
+  geom_hline(yintercept = 1, linetype = "dashed") +
+  scale_y_continuous(
+    breaks = c(0, 1, 2, 3, 4, 5),
+    labels = c("0", "1", "2", "3", "4", "5+")
+  ) +
+  theme_classic() +
+  theme(axis.text = element_text(size = 16),
+        axis.title = element_text(size = 18),
+        plot.subtitle = element_text(size = 16),
+        legend.position = "none") +
+  xlab("RELAX consensus result") +
+  ylab("mean K")
+
+RELAX_results_df_summary %>% group_by(consensus) %>% summarise(count = n())
+
+
+#Lets perform GOterm enrichment
+
+GO_annots_df <- read.table("OGG_GOterms.tsv",sep="\t",header=FALSE)
+colnames(GO_annots_df) <- c("OGG", "GO")
+GO_classes_df <- read.table("goterm_class.csv",sep="\t",header=FALSE)
+colnames(GO_classes_df) <- c("GO", "class")
+GO_annots_df <- left_join(GO_annots_df, GO_classes_df, by="GO")
+BP_GO_annots_df <- GO_annots_df %>% filter(class == "biological_process") %>% dplyr::select(-class)
+
+list_goterms <- BP_GO_annots_df %>% pull(GO) %>% unique()
+
+
+intensified_HOGs <- 
+  RELAX_results_df_summary %>% filter(consensus == "intensification") %>% pull(HOG)
+relaxed_HOGs <- 
+  RELAX_results_df_summary %>% filter(consensus == "relaxation") %>% pull(HOG)
+
+
+# Define gene background
+background_genes <- RER_all_df %>% pull(HOG) %>% unique()
+gene_background <- BP_GO_annots_df %>% filter(OGG %in% background_genes) %>% pull(OGG) %>% unique()
+
+intensified_HOGs <- 
+  RELAX_results_df_summary %>% filter(consensus == "intensification") %>% pull(HOG)
+relaxed_HOGs <- 
+  RELAX_results_df_summary %>% filter(consensus == "relaxation") %>% pull(HOG)
+
+intensified_HOGs <- intersect(intensified_HOGs, gene_background)
+relaxed_HOGs <- intersect(relaxed_HOGs, gene_background)
+
+
+# Define GO terms annotated for the top100 genes and associated to atleast 1 gene
+GO_terms_in_intensified <-
+  BP_GO_annots_df %>%
+  filter(OGG %in% intensified_HOGs) %>%
+  group_by(GO) %>%
+  summarise(count = n()) %>%
+  filter(count >= 1) %>%
+  pull(GO) %>%
+  unique()
+
+GO_terms_in_relaxed <-
+  BP_GO_annots_df %>%
+  filter(OGG %in% relaxed_HOGs) %>%
+  group_by(GO) %>%
+  summarise(count = n()) %>%
+  filter(count >= 1) %>%
+  pull(GO) %>%
+  unique()
+
+# Subset table to only relevant GO terms
+BP_GO_annots_df.subsetIntens <-  
+  BP_GO_annots_df %>% filter(GO %in% GO_terms_in_intensified) %>%
+  filter(OGG %in% gene_background)
+BP_GO_annots_df.subsetRelax <-  
+  BP_GO_annots_df %>% filter(GO %in% GO_terms_in_relaxed) %>%
+  filter(OGG %in% gene_background)
+
+tokeep <- BP_GO_annots_df.subsetIntens %>%  group_by(GO) %>% summarise(count = n()) %>% filter(count >= 3) %>% pull(GO)
+BP_GO_annots_df.subsetIntens <- BP_GO_annots_df.subsetIntens %>% filter(GO %in% tokeep)
+
+tokeep <- BP_GO_annots_df.subsetRelax %>%  group_by(GO) %>% summarise(count = n()) %>% filter(count >= 3) %>% pull(GO)
+BP_GO_annots_df.subsetRelax <- BP_GO_annots_df.subsetRelax %>% filter(GO %in% tokeep)
+
+# Build GO count table
+go_counts.intensified <- 
+  BP_GO_annots_df.subsetIntens %>%
+  distinct(GO, OGG) %>%
+  mutate(
+    InTestSet = OGG %in% intensified_HOGs,
+    InBackground = OGG %in% gene_background
+  ) %>%
+  group_by(GO) %>%
+  summarise(
+    count_InTest = sum(InTestSet),
+    genes_InTest = paste(unique(OGG[InTestSet]), collapse = ";"),
+    count_InBackground = sum(InBackground),
+    count_TotalTest = length(intensified_HOGs),
+    count_TotalBackground = length(gene_background),
+    .groups = "drop"
+  )
+
+
+go_counts.relaxed <- 
+  BP_GO_annots_df.subsetRelax %>%
+  distinct(GO, OGG) %>%
+  mutate(
+    InTestSet = OGG %in% relaxed_HOGs,
+    InBackground = OGG %in% gene_background
+  ) %>%
+  group_by(GO) %>%
+  summarise(
+    count_InTest = sum(InTestSet),
+    genes_InTest = paste(unique(OGG[InTestSet]), collapse = ";"),
+    count_InBackground = sum(InBackground),
+    count_TotalTest = length(relaxed_HOGs),
+    count_TotalBackground = length(gene_background),
+    .groups = "drop"
+  )
+
+
+# Apply Fisher's exact test
+go_enrichment.intensified <- 
+  go_counts.intensified %>%
+  rowwise() %>%
+  mutate(
+    a = count_InTest,
+    b = count_TotalTest - count_InTest,
+    c = count_InBackground - count_InTest,
+    d = count_TotalBackground - count_TotalTest - c,
+    p_value = fisher.test(
+      matrix(c(a, b, c, d), nrow = 2, byrow = TRUE),
+      alternative = "greater"
+    )$p.value
+  ) %>%
+  ungroup() %>%
+  mutate(
+    p_adj = p.adjust(p_value, method = "fdr"),
+    prop_acc = count_InTest / count_TotalTest,
+    prop_all = count_InBackground / count_TotalBackground,
+    fold_enrichment = prop_acc / prop_all
+  ) %>%
+  arrange(p_value) %>%
+  select(-prop_acc, -prop_all, -a, -b, -c, -d)
+
+
+
+go_enrichment.relaxed <- 
+  go_counts.relaxed %>%
+  rowwise() %>%
+  mutate(
+    a = count_InTest,
+    b = count_TotalTest - count_InTest,
+    c = count_InBackground - count_InTest,
+    d = count_TotalBackground - count_TotalTest - c,
+    p_value = fisher.test(
+      matrix(c(a, b, c, d), nrow = 2, byrow = TRUE),
+      alternative = "greater"
+    )$p.value
+  ) %>%
+  ungroup() %>%
+  mutate(
+    p_adj = p.adjust(p_value, method = "fdr"),
+    prop_acc = count_InTest / count_TotalTest,
+    prop_all = count_InBackground / count_TotalBackground,
+    fold_enrichment = prop_acc / prop_all
+  ) %>%
+  arrange(p_value) %>%
+  select(-prop_acc, -prop_all, -a, -b, -c, -d)
+
+go_enrichment.intensified <- as.data.frame(go_enrichment.intensified)
+go_enrichment.relaxed <- as.data.frame(go_enrichment.relaxed)
+
+
+
+#Add GO-term descriptions
+GO_term_desc <- read.table("goterm_desc.csv",sep="\t",header=FALSE)
+colnames(GO_term_desc) <- c("GO", "term")
+
+
+go_enrichment.intensified <- left_join(go_enrichment.intensified, GO_term_desc, by='GO')
+go_enrichment.relaxed <- left_join(go_enrichment.relaxed, GO_term_desc, by='GO')
+
+
+
+go_enrichment.intensified <- go_enrichment.intensified %>% mutate(geneset = "intensified")
+go_enrichment.relaxed <- go_enrichment.intensified %>% mutate(geneset = "relaxed")
+go_enrichment.all <- rbind(go_enrichment.intensified, go_enrichment.relaxed)
+
+
+
+go_enrichment.all_plot <- 
+  go_enrichment.all %>%
+  mutate(conditional_log_pval = -log10(p_adj)) %>%
+  mutate(conditional_fold = if_else(
+    geneset == "intensified",
+    log10(fold_enrichment),
+    -log10(fold_enrichment)
   ))
 
+go_enrichment.all %>% filter(p_adj < 0.05) %>% filter(geneset == "intensified")
 
-
-#Make a plot of the results  
-
-
-RELAX_RERacc_df %>%
-  ggplot(., aes(x=K_normal, y=-log10(pvalue), fill=RELAX_rslt, shape=vision_related)) + 
-  geom_jitter(width = 0.1, height = 0.1) + 
-
-  scale_fill_manual(values = c("Non_significant" = "black", "Itensification" = "#E69F00", 
-                               "Relaxation" = "#56B4E9")) +
-  scale_shape_manual(values = c("Yes" = 24, "No" = 21)) +
-  geom_hline(yintercept = -log10(0.05), color="black", linetype="dashed") +
-  geom_vline(xintercept = 1, color="black", linetype="dashed") +
+go_enrichment.all_plot %>%
+  ggplot(., aes(x=conditional_fold, y=conditional_log_pval, color=geneset)) +
+  geom_point() +
+  scale_color_manual(values = c("relaxed" = "#CC79A7", "intensified" = "#56B4E9")) + 
   theme_classic() +
   theme(axis.text=element_text(size=12),
         axis.title=element_text(size=14)) +
   theme(axis.text=element_text(size=16),
         axis.title=element_text(size=18),
         plot.subtitle=element_text(size=16)) +
-  theme(legend.position = "none") +
-  xlab("K") 
+  geom_hline(yintercept = -log10(0.05), linetype="dashed") + 
+  xlab("Fold enrichment") +
+  ylab("-log10(p.adj)")
 
 
-RELAX_RERacc_df %>% filter(vision_related == "Yes")
 
-#Look at genes evolving under relaxed selection
 
-RELAX_RERacc_df %>%
-  filter(RELAX_rslt == "Relaxation")
-
-#Look at genes evolving under intensified selection
-
-RELAX_RERacc_df %>%
-  filter(RELAX_rslt == "Itensification")
 
 ##### Import cSUBST results -- Gene Tree  ---------------------------------
 
